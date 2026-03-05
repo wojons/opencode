@@ -33,6 +33,7 @@ import path from "path"
 import { Global } from "./global"
 import { JsonMigration } from "./storage/json-migration"
 import { Database } from "./storage/db"
+import { Instance } from "./project/instance"
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
@@ -49,7 +50,18 @@ process.on("uncaughtException", (e) => {
 // Ensure the process exits on terminal hangup (eg. closing the terminal tab).
 // Without this, long-running commands like `serve` block on a never-resolving
 // promise and survive as orphaned processes.
-process.on("SIGHUP", () => process.exit())
+// Also handle SIGTERM so that process managers and container runtimes can
+// trigger a clean shutdown that disposes LSP / MCP / PTY child processes.
+let exiting = false
+const shutdown = () => {
+  if (exiting) return
+  exiting = true
+  void Instance.disposeAll()
+    .catch(() => {})
+    .finally(() => process.exit())
+}
+process.on("SIGHUP", shutdown)
+process.on("SIGTERM", shutdown)
 
 let cli = yargs(hideBin(process.argv))
   .parserConfiguration({ "populate--": true })

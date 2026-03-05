@@ -5,11 +5,13 @@ import { Session } from "."
 import { MessageV2 } from "./message-v2"
 import { Identifier } from "@/id/id"
 import { Snapshot } from "@/snapshot"
+import { Log } from "@/util/log"
 
 import { Storage } from "@/storage/storage"
 import { Bus } from "@/bus"
 
 export namespace SessionSummary {
+  const log = Log.create({ service: "session.summary" })
   function unquoteGitPath(input: string) {
     if (!input.startsWith('"')) return input
     if (!input.endsWith('"')) return input
@@ -66,19 +68,46 @@ export namespace SessionSummary {
     return Buffer.from(bytes).toString()
   }
 
+  // "Last-writer-wins" queue: ensures at most one summarize runs per session at
+  // a time.  If a new request arrives while one is already running the latest
+  // input is recorded and processed as soon as the current run completes.
+  // Without this, every finish-step event fires a concurrent summarize, and
+  // each one loads ALL session messages + runs expensive git operations.
+  const queues = new Map<string, { latest: { sessionID: string; messageID: string } }>()
+
   export const summarize = fn(
     z.object({
       sessionID: z.string(),
       messageID: z.string(),
     }),
-    async (input) => {
-      const all = await Session.messages({ sessionID: input.sessionID })
-      await Promise.all([
-        summarizeSession({ sessionID: input.sessionID, messages: all }),
-        summarizeMessage({ messageID: input.messageID, messages: all }),
-      ])
+    (input) => {
+      const entry = queues.get(input.sessionID)
+      if (entry) {
+        entry.latest = input // update; running call will re-run with this
+        return
+      }
+      const q = { latest: input }
+      queues.set(input.sessionID, q)
+      void runSummary(q)
     },
   )
+
+  async function runSummary(q: { latest: { sessionID: string; messageID: string } }) {
+    const { sessionID } = q.latest
+    try {
+      while (true) {
+        const current = q.latest
+        const all = await Session.messages({ sessionID: current.sessionID })
+        await summarizeSession({ sessionID: current.sessionID, messages: all })
+        // If no newer request arrived while we were working, we're done.
+        if (q.latest === current) break
+      }
+    } catch (err) {
+      log.error("summarize failed", { sessionID, err })
+    } finally {
+      queues.delete(sessionID)
+    }
+  }
 
   async function summarizeSession(input: { sessionID: string; messages: MessageV2.WithParts[] }) {
     const diffs = await computeDiff({ messages: input.messages })
@@ -95,20 +124,6 @@ export namespace SessionSummary {
       sessionID: input.sessionID,
       diff: diffs,
     })
-  }
-
-  async function summarizeMessage(input: { messageID: string; messages: MessageV2.WithParts[] }) {
-    const messages = input.messages.filter(
-      (m) => m.info.id === input.messageID || (m.info.role === "assistant" && m.info.parentID === input.messageID),
-    )
-    const msgWithParts = messages.find((m) => m.info.id === input.messageID)!
-    const userMsg = msgWithParts.info as MessageV2.User
-    const diffs = await computeDiff({ messages })
-    userMsg.summary = {
-      ...userMsg.summary,
-      diffs,
-    }
-    await Session.updateMessage(userMsg)
   }
 
   export const diff = fn(
