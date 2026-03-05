@@ -90,6 +90,11 @@ export namespace SessionCompaction {
     if (pruned > PRUNE_MINIMUM) {
       for (const part of toPrune) {
         if (part.state.status === "completed") {
+          // Actually erase the output so it is not held in memory on every
+          // subsequent session-loop iteration and does not bloat the database.
+          // The metadata preview is intentionally preserved for UI display.
+          part.state.output = ""
+          part.state.attachments = undefined
           part.state.time.compacted = Date.now()
           await Session.updatePart(part)
         }

@@ -48,15 +48,26 @@ export namespace LSPClient {
       new StreamMessageWriter(input.server.process.stdin as any),
     )
 
+    // Declared before the notification handlers so they are in scope for closures.
     const diagnostics = new Map<string, Diagnostic[]>()
+    const files: { [path: string]: number } = {}
+
     connection.onNotification("textDocument/publishDiagnostics", (params) => {
       const filePath = Filesystem.normalizePath(fileURLToPath(params.uri))
       l.info("textDocument/publishDiagnostics", {
         path: filePath,
         count: params.diagnostics.length,
       })
+      // Only track diagnostics for files we have explicitly opened.
+      // LSP servers proactively analyse entire workspaces and emit diagnostics
+      // for thousands of files, which causes unbounded memory growth.
+      if (!(filePath in files)) return
       const exists = diagnostics.has(filePath)
-      diagnostics.set(filePath, params.diagnostics)
+      if (params.diagnostics.length === 0) {
+        diagnostics.delete(filePath)
+      } else {
+        diagnostics.set(filePath, params.diagnostics)
+      }
       if (!exists && input.serverID === "typescript") return
       Bus.publish(Event.Diagnostics, { path: filePath, serverID: input.serverID })
     })
@@ -131,10 +142,6 @@ export namespace LSPClient {
         settings: input.server.initialization,
       })
     }
-
-    const files: {
-      [path: string]: number
-    } = {}
 
     const result = {
       root: input.root,

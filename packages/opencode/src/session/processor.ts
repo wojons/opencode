@@ -262,7 +262,9 @@ export namespace SessionProcessor {
                   })
                   await Session.updateMessage(input.assistantMessage)
                   if (snapshot) {
-                    const patch = await Snapshot.patch(snapshot)
+                    // track() was just called above; pass fresh:true to skip
+                    // the redundant git-add-everything that patch() normally runs.
+                    const patch = await Snapshot.patch(snapshot, { fresh: true })
                     if (patch.files.length) {
                       await Session.updatePart({
                         id: Identifier.ascending("part"),

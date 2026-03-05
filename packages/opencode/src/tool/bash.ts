@@ -233,8 +233,14 @@ export const BashTool = Tool.define("bash", async () => {
           ctx.abort.removeEventListener("abort", abortHandler)
         }
 
+        // Mark as exited immediately so Shell.killTree won't double-kill.
         proc.once("exit", () => {
           exited = true
+        })
+
+        // Wait for "close" (fires after all stdio FDs are released) rather than
+        // "exit" so that pipe file-descriptors are not left open between commands.
+        proc.once("close", () => {
           cleanup()
           resolve()
         })

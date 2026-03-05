@@ -85,9 +85,11 @@ export namespace Snapshot {
   })
   export type Patch = z.infer<typeof Patch>
 
-  export async function patch(hash: string): Promise<Patch> {
+  export async function patch(hash: string, opts?: { fresh?: boolean }): Promise<Patch> {
     const git = gitdir()
-    await add(git)
+    // Skip re-indexing when the caller already ran track() (which calls add)
+    // immediately before this call – avoids a redundant full-project git-add.
+    if (!opts?.fresh) await add(git)
     const result =
       await $`git -c core.autocrlf=false -c core.longpaths=true -c core.symlinks=true -c core.quotepath=false --git-dir ${git} --work-tree ${Instance.worktree} diff --no-ext-diff --name-only ${hash} -- .`
         .quiet()
